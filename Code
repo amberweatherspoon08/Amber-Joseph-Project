@@ -1,0 +1,283 @@
+import os
+from PIL import Image
+
+def analyze_images(folder_path):
+    # Supported image extensions
+    image_extensions = (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif")
+
+    image_files = [
+        f for f in os.listdir(folder_path)
+        if f.lower().endswith(image_extensions)
+    ]
+
+    print(f"Number of images found: {len(image_files)}\n")
+
+    for filename in image_files:
+        image_path = os.path.join(folder_path, filename)
+
+        with Image.open(image_path) as img:
+            width, height = img.size
+            mode = img.mode
+
+            # Grayscale check
+            is_grayscale = mode in ("L", "LA")
+
+            print(f"Image: {filename}")
+            print(f"  Size: {width} x {height}")
+            print(f"  Grayscale: {'Yes' if is_grayscale else 'No'}\n")
+
+
+# ---- CHANGE THIS PATH ----
+folder_path = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\Figshare\Testing\glioma_tumor"
+
+analyze_images(folder_path)
+
+
+
+
+
+
+
+
+#################--------------------end code--------------------###################
+
+import os
+import csv
+
+# ============================================================
+# 🔧 CHANGE THIS — put the full path to Dataset #2 on your PC
+# Example:
+# DATASET2_PATH = r"C:\Users\ACT-SO AA10\Documents\ACT-SO 25-26\BrainTumorDataset2"
+# ============================================================
+DATASET2_PATH = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\Figshare"   #  <<<<<<< CHANGE THIS ONLY
+
+# ============================================================
+# 📁 CSV output path — OPTIONAL to change (only if you want)
+# If you want it to save somewhere else, you can edit this.
+# If not, leave it exactly as-is.
+# ============================================================
+OUTPUT_CSV = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\dataset3_classes.csv"     #  << optional — leave alone unless you want another save location
+
+# Tumor class column names — DO NOT change
+CLASSES = ["Unlabeled", "glioma_tumor", "meningioma_tumor", "no_tumor", "pituitary_tumor"]
+
+# Storage
+rows = []
+
+# Loop through Training and Testing folders — DO NOT change
+for split in ["Training", "Testing"]:
+    split_dir = os.path.join(DATASET2_PATH, split)
+
+    for tumor_class in CLASSES[1:]:  # skips "Unlabeled"
+        class_dir = os.path.join(split_dir, tumor_class)
+
+        if not os.path.isdir(class_dir):
+            continue
+
+        for filename in os.listdir(class_dir):
+            if filename.lower().endswith((".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif")):
+
+                row = {
+                    "filename": filename,
+                    "Unlabeled": 0,
+                    "glioma_tumor": 1 if tumor_class == "glioma_tumor" else 0,
+                    "meningioma_tumor": 1 if tumor_class == "meningioma_tumor" else 0,
+                    "no_tumor": 1 if tumor_class == "no_tumor" else 0,
+                    "pituitary_tumor": 1 if tumor_class == "pituitary_tumor" else 0
+                }
+                rows.append(row)
+
+# Write CSV — DO NOT change
+with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=["filename"] + CLASSES)
+    writer.writeheader()
+    writer.writerows(rows)
+
+print("\nCSV created successfully at:", OUTPUT_CSV)
+
+#################--------------------end code--------------------###################
+
+
+
+from PIL import Image
+import matplotlib.pyplot as plt
+
+# 🔧 CHANGE THIS to the full path of an image you want to display:
+image_path = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\Figshare\Testing\glioma_tumor\741.jpg"
+
+# Load image
+img = Image.open(image_path)
+
+# Display
+plt.imshow(img, cmap=None)  # remove cmap if it's not grayscale
+plt.axis("off")
+plt.show()
+
+#################--------------------end code--------------------###################
+
+import pandas as pd
+
+dataset=pd.read_csv(r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\dataset3_classes.csv")
+dataset.head()  # Display first few rows of the dataset
+
+#################--------------------end code--------------------###################
+
+import os
+import shutil
+
+# 🔧 CHANGE THESE PATHS
+DATASET_ROOT = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\Figshare"
+OUTPUT_DIR = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\new_figshare"
+CLASSES_FILE = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\Figshare\dataset2_classes.csv"
+
+train_dir = os.path.join(DATASET_ROOT, "Training")  # ← capital T
+test_dir  = os.path.join(DATASET_ROOT, "Testing")   # ← capital T
+
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+def copy_images(source_dir):
+    for class_name in os.listdir(source_dir):
+        class_path = os.path.join(source_dir, class_name)
+        if not os.path.isdir(class_path):
+            continue
+
+        dest_class_path = os.path.join(OUTPUT_DIR, class_name)
+        os.makedirs(dest_class_path, exist_ok=True)
+
+        for img in os.listdir(class_path):
+            src = os.path.join(class_path, img)
+            dst = os.path.join(dest_class_path, img)
+            shutil.copy2(src, dst)
+
+# Combine both folders
+copy_images(train_dir)
+copy_images(test_dir)
+
+# Optional: copy class sheet into new dataset
+if os.path.exists(CLASSES_FILE):
+    shutil.copy2(CLASSES_FILE, OUTPUT_DIR)
+
+print("✅ Training and testing datasets combined successfully.")
+
+
+#################--------------------end code--------------------###################
+
+
+
+import os
+import shutil
+
+# 🔧 CHANGE THESE
+SOURCE_DIR = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\new_figshare"
+OUTPUT_DIR = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\figshare_combined_dataset"
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+for class_name in os.listdir(SOURCE_DIR):
+    class_path = os.path.join(SOURCE_DIR, class_name)
+    if not os.path.isdir(class_path):
+        continue
+
+    for img in os.listdir(class_path):
+        src = os.path.join(class_path, img)
+
+        # avoid filename collisions
+        new_name = f"{class_name}_{img}"
+        dst = os.path.join(OUTPUT_DIR, new_name)
+
+        shutil.copy2(src, dst)
+
+print("✅ Images flattened into one folder.")
+
+
+#################--------------------end code--------------------###################
+
+
+import os, shutil
+
+ROOT = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\roboflow_braintumors"
+OUT  = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\roboflow_combined_dataset"
+
+os.makedirs(OUT, exist_ok=True)
+
+for split in ["train", "test", "valid"]:
+    for img in os.listdir(os.path.join(ROOT, split)):
+        src = os.path.join(ROOT, split, img)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(OUT, f"{split}_{img}"))
+
+print("✅ Combined (no class folders).")
+
+#################--------------------end code--------------------###################
+
+import os
+import random
+import shutil
+
+# 🔧 CHANGE THESE
+DATASET_DIR = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\figshare_combined_dataset"
+SHUFFLED_DIR = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\figshare_shuffled"
+
+os.makedirs(SHUFFLED_DIR, exist_ok=True)
+
+images = [f for f in os.listdir(DATASET_DIR)
+          if f.lower().endswith((".jpg", ".png", ".jpeg"))]
+
+random.shuffle(images)
+
+for img in images:
+    shutil.copy2(
+        os.path.join(DATASET_DIR, img),
+        os.path.join(SHUFFLED_DIR, img)
+    )
+
+print("✅ Dataset shuffled.")
+
+#################--------------------end code--------------------###################
+from torch.utils.data import random_split, DataLoader
+from torchvision import datasets, transforms
+
+dataset = datasets.ImageFolder(
+    root=r"C:\path\to\dataset",
+    transform=transforms.ToTensor()
+)
+
+train_size = int(0.8 * len(dataset))
+val_size = len(dataset) - train_size
+
+train_ds, val_ds = random_split(dataset, [train_size, val_size])
+
+train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+val_loader   = DataLoader(val_ds, batch_size=32, shuffle=False)
+
+#################--------------------end code--------------------###################
+
+
+import pandas as pd
+from PIL import Image
+import matplotlib.pyplot as plt
+import os
+
+CSV_PATH = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\figshare_combined_dataset\class.csv"
+IMAGE_ROOT = r"C:\Users\ACT-SO_AA10\Documents\ACT-SO 25-26\figshare_combined_dataset"
+
+df = pd.read_csv(CSV_PATH)
+
+img_name = df.iloc[0]["filename"]
+
+img_path = None
+for root, _, files in os.walk(IMAGE_ROOT):
+    if img_name in files:
+        img_path = os.path.join(root, img_name)
+        break
+
+if img_path is None:
+    raise FileNotFoundError(f"{img_name} not found in dataset")
+
+img = Image.open(img_path)
+
+plt.imshow(img)
+plt.axis("off")
+plt.show()
+
