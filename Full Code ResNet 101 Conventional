@@ -264,20 +264,25 @@ class ResNet(nn.Module):
 
 Cell 4
 
+from torch.utils.data import random_split
+
 CSV_PATH = r"C:\path\to\your\classes.csv"
 IMAGE_DIR = r"C:\path\to\your\images"
 
-dataset = BrainTumorDataset(
+full_dataset = BrainTumorDataset(
     csv_path=CSV_PATH,
     image_dir=IMAGE_DIR,
-    transform=None  # can add transforms later
+    transform=None
 )
 
-dataloader = DataLoader(
-    dataset,
-    batch_size=16,
-    shuffle=True
-)
+# 80% train, 20% validation
+train_size = int(0.8 * len(full_dataset))
+val_size = len(full_dataset) - train_size
+
+train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
 
 
 
@@ -288,7 +293,7 @@ resnet_variant = model_parameters['resnet101']
 
 model = ResNet(
     resnet_variant=resnet_variant,
-    in_channels=1,
+    in_channels=3,
     num_classes=4   # Unlabeled removed
 ).to(device)
 
@@ -391,5 +396,3 @@ Cell 7
         }, "best_model.pth")
 
         print("Saved new best model")
-
-
