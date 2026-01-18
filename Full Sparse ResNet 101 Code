@@ -1,0 +1,459 @@
+Cell 1
+
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
+import os
+import MinkowskiEngine as ME
+import open3d as o3d
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+Cell 2
+
+import pandas as pd
+import random
+
+class CSVSparseDataset(torch.utils.data.Dataset):
+    def __init__(self, root_dir, csv_path, split="train", split_ratio=(0.7, 0.15, 0.15)):
+        self.root_dir = root_dir
+        self.df = pd.read_csv(csv_path)
+
+        # Drop unlabeled class column
+        self.class_columns = [
+            "glioma_tumor",
+            "meningioma_tumor",
+            "no_tumor",
+            "pituitary_tumor"
+        ]
+
+        # Convert one-hot → single class label
+        self.df["label"] = self.df[self.class_columns].values.argmax(axis=1)
+
+        # Build file list
+        self.files = self.df["filename"].tolist()
+        self.labels = self.df["label"].tolist()
+
+        # Shuffle and split
+        combined = list(zip(self.files, self.labels))
+        random.shuffle(combined)
+
+        n = len(combined)
+        train_end = int(n * split_ratio[0])
+        val_end = train_end + int(n * split_ratio[1])
+
+        if split == "train":
+            self.data = combined[:train_end]
+        elif split == "val":
+            self.data = combined[train_end:val_end]
+        else:
+            self.data = combined[val_end:]
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        filename, label = self.data[idx]
+        path = os.path.join(self.root_dir, filename)
+
+        pcd = o3d.io.read_point_cloud(path)
+
+        coords = torch.tensor(np.array(pcd.points), dtype=torch.float32)
+        feats = torch.tensor(np.array(pcd.colors), dtype=torch.float32)
+
+        return coords, feats, torch.tensor(label, dtype=torch.long)
+
+
+Cell 3
+
+# Copyright (c) Chris Choy (chrischoy@ai.stanford.edu).
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of
+# this software and associated documentation files (the "Software"), to deal in
+# the Software without restriction, including without limitation the rights to
+# use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+# of the Software, and to permit persons to whom the Software is furnished to do
+# so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# Please cite "4D Spatio-Temporal ConvNets: Minkowski Convolutional Neural
+# Networks", CVPR'19 (https://arxiv.org/abs/1904.08755) if you use any part
+# of the code.
+import os
+from urllib.request import urlretrieve
+import numpy as np
+
+import torch
+import torch.nn as nn
+from torch.optim import SGD
+
+try:
+    import open3d as o3d
+except ImportError:
+    raise ImportError("Please install open3d with `pip install open3d`.")
+
+import MinkowskiEngine as ME
+from MinkowskiEngine.modules.resnet_block import BasicBlock, Bottleneck
+
+
+if not os.path.isfile("1.ply"):
+    print('Downloading an example pointcloud...')
+    urlretrieve("https://bit.ly/3c2iLhg", "1.ply")
+
+
+def load_file(file_name):
+    pcd = o3d.io.read_point_cloud(file_name)
+    coords = np.array(pcd.points)
+    colors = np.array(pcd.colors)
+    return coords, colors, pcd
+
+
+class ResNetBase(nn.Module):
+    BLOCK = None
+    LAYERS = ()
+    INIT_DIM = 64
+    PLANES = (64, 128, 256, 512)
+    #PLANES = (128, 256, 512, 1024) 
+
+    def __init__(self, in_channels, out_channels, D=3):
+        nn.Module.__init__(self)
+        self.D = D
+        assert self.BLOCK is not None
+
+        self.network_initialization(in_channels, out_channels, D)
+        self.weight_initialization()
+
+    def network_initialization(self, in_channels, out_channels, D):
+
+        self.inplanes = self.INIT_DIM
+        self.conv1 = nn.Sequential(
+            ME.MinkowskiConvolution(
+                in_channels, self.inplanes, kernel_size=3, stride=2, dimension=D
+            ),
+            ME.MinkowskiInstanceNorm(self.inplanes),
+            ME.MinkowskiReLU(inplace=True),
+            ME.MinkowskiMaxPooling(kernel_size=2, stride=2, dimension=D),
+        )
+
+        self.layer1 = self._make_layer(
+            self.BLOCK, self.PLANES[0], self.LAYERS[0], stride=2
+        )
+        self.layer2 = self._make_layer(
+            self.BLOCK, self.PLANES[1], self.LAYERS[1], stride=2
+        )
+        self.layer3 = self._make_layer(
+            self.BLOCK, self.PLANES[2], self.LAYERS[2], stride=2
+        )
+        self.layer4 = self._make_layer(
+            self.BLOCK, self.PLANES[3], self.LAYERS[3], stride=2
+        )
+
+        self.conv5 = nn.Sequential(
+            ME.MinkowskiDropout(),
+            ME.MinkowskiConvolution(
+                self.inplanes, self.inplanes, kernel_size=3, stride=3, dimension=D
+            ),
+            ME.MinkowskiInstanceNorm(self.inplanes),
+            ME.MinkowskiGELU(),
+        )
+
+        self.glob_pool = ME.MinkowskiGlobalMaxPooling()
+
+        self.final = ME.MinkowskiLinear(self.inplanes, out_channels, bias=True)
+
+    def weight_initialization(self):
+        for m in self.modules():
+            if isinstance(m, ME.MinkowskiConvolution):
+                ME.utils.kaiming_normal_(m.kernel, mode="fan_out", nonlinearity="relu")
+
+            if isinstance(m, ME.MinkowskiBatchNorm):
+                nn.init.constant_(m.bn.weight, 1)
+                nn.init.constant_(m.bn.bias, 0)
+
+    def _make_layer(self, block, planes, blocks, stride=1, dilation=1, bn_momentum=0.1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                ME.MinkowskiConvolution(
+                    self.inplanes,
+                    planes * block.expansion,
+                    kernel_size=1,
+                    stride=stride,
+                    dimension=self.D,
+                ),
+                ME.MinkowskiBatchNorm(planes * block.expansion),
+            )
+        layers = []
+        layers.append(
+            block(
+                self.inplanes,
+                planes,
+                stride=stride,
+                dilation=dilation,
+                downsample=downsample,
+                dimension=self.D,
+            )
+        )
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(
+                block(
+                    self.inplanes, planes, stride=1, dilation=dilation, dimension=self.D
+                )
+            )
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x: ME.SparseTensor):
+        x = self.conv1(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.conv5(x)
+        x = self.glob_pool(x)
+        return self.final(x)
+
+
+class ResNet14(ResNetBase):
+    BLOCK = BasicBlock
+    LAYERS = (1, 1, 1, 1)
+
+
+class ResNet18(ResNetBase):
+    BLOCK = BasicBlock
+    LAYERS = (2, 2, 2, 2)
+
+
+class ResNet34(ResNetBase):
+    BLOCK = BasicBlock
+    LAYERS = (3, 4, 6, 3)
+
+
+class ResNet50(ResNetBase):
+    BLOCK = Bottleneck
+    LAYERS = (3, 4, 6, 3)
+
+
+class ResNet101(ResNetBase):
+    BLOCK = Bottleneck
+    LAYERS = (3, 4, 23, 3)
+
+# Stuff below this line is not used 
+
+class ResFieldNetBase(ResNetBase):
+    def network_initialization(self, in_channels, out_channels, D):
+        field_ch = 32
+        field_ch2 = 64
+        self.field_network = nn.Sequential(
+            ME.MinkowskiSinusoidal(in_channels, field_ch),
+            ME.MinkowskiBatchNorm(field_ch),
+            ME.MinkowskiReLU(inplace=True),
+            ME.MinkowskiLinear(field_ch, field_ch),
+            ME.MinkowskiBatchNorm(field_ch),
+            ME.MinkowskiReLU(inplace=True),
+            ME.MinkowskiToSparseTensor(),
+        )
+        self.field_network2 = nn.Sequential(
+            ME.MinkowskiSinusoidal(field_ch + in_channels, field_ch2),
+            ME.MinkowskiBatchNorm(field_ch2),
+            ME.MinkowskiReLU(inplace=True),
+            ME.MinkowskiLinear(field_ch2, field_ch2),
+            ME.MinkowskiBatchNorm(field_ch2),
+            ME.MinkowskiReLU(inplace=True),
+            ME.MinkowskiToSparseTensor(),
+        )
+
+        ResNetBase.network_initialization(self, field_ch2, out_channels, D)
+
+    def forward(self, x: ME.TensorField):
+        otensor = self.field_network(x)
+        otensor2 = self.field_network2(otensor.cat_slice(x))
+        return ResNetBase.forward(self, otensor2)
+
+
+class ResFieldNet14(ResFieldNetBase):
+    BLOCK = BasicBlock
+    LAYERS = (1, 1, 1, 1)
+
+
+class ResFieldNet18(ResFieldNetBase):
+    BLOCK = BasicBlock
+    LAYERS = (2, 2, 2, 2)
+
+
+class ResFieldNet34(ResFieldNetBase):
+    BLOCK = BasicBlock
+    LAYERS = (3, 4, 6, 3)
+
+
+class ResFieldNet50(ResFieldNetBase):
+    BLOCK = Bottleneck
+    LAYERS = (3, 4, 6, 3)
+
+
+class ResFieldNet101(ResFieldNetBase):
+    BLOCK = Bottleneck
+    LAYERS = (3, 4, 23, 3)
+
+
+
+Cell 4
+
+TRAIN_DIR = r"C:\path\to\train"
+VAL_DIR = r"C:\path\to\val"
+TEST_DIR = r"C:\path\to\test"
+
+train_dataset = PointCloudDataset(TRAIN_DIR)
+val_dataset = PointCloudDataset(VAL_DIR)
+test_dataset = PointCloudDataset(TEST_DIR)
+
+train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+
+model = ResNet18(in_channels=3, out_channels=4).to(device)
+
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+
+
+Cell 5
+
+num_epochs = 400
+patience = 5
+warm_up_epochs = 3
+
+best_val_loss = float("inf")
+patience_counter = 0
+
+CHECKPOINT_PATH = "best_sparse_resnet.pth"
+
+for epoch in range(num_epochs):
+    model.train()
+    train_loss = 0.0
+
+    for coords, feats, labels in train_loader:
+        coords = coords.to(device)
+        feats = feats.to(device)
+        labels = labels.to(device)
+
+        # Create SparseTensor
+        sparse_input = ME.SparseTensor(
+            feats, 
+            coordinates=ME.utils.batched_coordinates([coords])
+        )
+
+        optimizer.zero_grad()
+        outputs = model(sparse_input).F
+        loss = criterion(outputs, labels)
+
+        loss.backward()
+        optimizer.step()
+
+        train_loss += loss.item()
+
+    avg_train_loss = train_loss / len(train_loader)
+
+    # ----------------------
+    # Validation
+    # ----------------------
+    model.eval()
+    val_loss = 0.0
+
+    with torch.no_grad():
+        for coords, feats, labels in val_loader:
+            coords = coords.to(device)
+            feats = feats.to(device)
+            labels = labels.to(device)
+
+            sparse_input = ME.SparseTensor(
+                feats,
+                coordinates=ME.utils.batched_coordinates([coords])
+            )
+
+            outputs = model(sparse_input).F
+            loss = criterion(outputs, labels)
+            val_loss += loss.item()
+
+    avg_val_loss = val_loss / len(val_loader)
+
+    print(f"Epoch {epoch+1}")
+    print(f"Train Loss: {avg_train_loss:.4f}")
+    print(f"Val Loss: {avg_val_loss:.4f}")
+
+    # ----------------------
+    # Warm-up skip
+    # ----------------------
+    if epoch < warm_up_epochs:
+        print("Warm-up epoch, skipping early stopping")
+        continue
+
+    # ----------------------
+    # Save best model
+    # ----------------------
+    if avg_val_loss < best_val_loss:
+        best_val_loss = avg_val_loss
+        patience_counter = 0
+
+        torch.save({
+            "epoch": epoch,
+            "model_state": model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "val_loss": best_val_loss
+        }, CHECKPOINT_PATH)
+
+        print("✅ Best model saved!")
+    else:
+        patience_counter += 1
+        print(f"No improvement. Patience: {patience_counter}/{patience}")
+
+    # ----------------------
+    # Early stopping
+    # ----------------------
+    if patience_counter >= patience:
+        print("🛑 Early stopping triggered")
+        break
+
+
+Cell 6
+
+checkpoint = torch.load("best_sparse_resnet.pth")
+model.load_state_dict(checkpoint["model_state"])
+model.eval()
+
+correct = 0
+total = 0
+
+with torch.no_grad():
+    for coords, feats, labels in test_loader:
+        coords = coords.to(device)
+        feats = feats.to(device)
+        labels = labels.to(device)
+
+        sparse_input = ME.SparseTensor(
+            feats,
+            coordinates=ME.utils.batched_coordinates([coords])
+        )
+
+        outputs = model(sparse_input).F
+        preds = torch.argmax(outputs, dim=1)
+
+        correct += (preds == labels).sum().item()
+        total += labels.size(0)
+
+print(f"Test Accuracy: {100 * correct / total:.2f}%")
+
+
